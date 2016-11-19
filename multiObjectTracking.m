@@ -1,62 +1,133 @@
+% VIDEO INFO - 11 FPS
+
 function multiObjectTracking()
-% Create System objects used for reading video, detecting moving objects,
-% and displaying the results.
-obj = setupSystemObjects();
+%Setup vlFeat
+warning off;
+%JUAN PC
+%run ('vlfeat\toolbox\mex\mexw64\vl_version.mexw64')
+%run('C:\MATLAB\ImageCateogrisation\vlfeat\toolbox\vl_setup');
+%ADRIAN PC
+run('C:\Users\Admin\Documents\MATLAB\Extra\vlfeat\toolbox\vl_setup');
+
+%Load Masks
+ATTARD_MASK = single(rgb2gray(imread('attardmask.jpg')))./255;
+
+%Load PreTrained Data
+load('positiveHistograms.mat');
+load('negativeHistograms.mat');
+load('cTotalDescriptors.mat');
+
+%Setup Training Data
+trainingData = [positiveHistograms(1:end,:);negativeHistograms(1:end,:)];
+trainingLabels = [ones(size(positiveHistograms,1),1);zeros(size(negativeHistograms,1),1)];
+%Train KNN Model
+KNNTrainedModel = fitcknn(trainingData, trainingLabels);
+
+%Setup Video Paths
+ATTARD_VIDS_PATH = 'C:\Users\Admin\Documents\GIT\skylinewebcamcrawler\videos\Attard, Mdina Road from Citroen Showroom\';
+
+fileID = fopen('output.json','w');
+fprintf(fileID,'{\n');
+fclose(fileID);
+
+while(true)
+    direc = dir(strcat(ATTARD_VIDS_PATH,'*.mp4'));
+    currFile = strcat(ATTARD_VIDS_PATH,direc(1).name)
+    tic;
+    [carSpeed,carCount] = trackVideo(currFile,ATTARD_MASK,KNNTrainedModel,cTotalDescriptors);
+    elapsedTime = toc;
+   
+    isTrafficResult = 'true';
+
+    fileID = fopen('output.json','a');
+    toOutput = strcat('"', char(datetime('now')),'":[');
+    toOutput = strcat(toOutput,'{','"LOCATION": "ATTARD", "TRAFFIC":"',isTrafficResult,'"}');
+    toOutput = strcat(toOutput,']\n');
+    fprintf(fileID,toOutput);
+    fclose(fileID);
+    
+    videosToDelete = ceil((elapsedTime ./ 60) ./ 2);
+    
+    for i = 1:videosToDelete
+        delete(strcat(ATTARD_VIDS_PATH,direc(i).name));
+    end
+end
+end
+
+function [carSpeed,carCount] = trackVideo(videoPath,videoMask,KNNTrainedModel,cTotalDescriptors)
+%Setup System
+obj = setupSystemObjects(videoPath);
 
 opticFlow = opticalFlowLK('NoiseThreshold',0.009);
 
 % Detect moving objects, and track them across video frames.
 frameCount = 0;
-load('positiveHistograms.mat');
-load('negativeHistograms.mat');
-load('cTotalDescriptors.mat');
-trainingData = [positiveHistograms(1:end,:);negativeHistograms(1:end,:)];
-trainingLabels = [ones(size(positiveHistograms,1),1);zeros(size(negativeHistograms,1),1)];
 
-modelTraining = fitcknn(trainingData, trainingLabels);
 mag = [];
 count = [];
-    while ~isDone(obj.reader)
-        frame = readFrame(obj);
-        mask = detectObjects(frame, obj);
+
+tenFG = 0;
+elevenFG = 0;
+%figure;
+while ~isDone(obj.reader)
+    if frameCount == tenFG && frameCount ~= elevenFG
+        tenFG = tenFG + 10;
+        %Read next frame and apply mask
+        frame = readFrame(obj, videoMask, true);
+        %Transform image into blob image
+        blobImg = createBlobImage(frame, obj, true);
+        flow = estimateFlow(opticFlow,blobImg);
+    elseif frameCount == tenFG && frameCount == elevenFG
+        tenFG = tenFG + 10;
+    end
+    
+    %Every 11 Frames ie every second calculate speed and car count
+    if frameCount == elevenFG
+        elevenFG = elevenFG + 11;
+        %Read next frame and apply mask
+        frame = readFrame(obj, videoMask, true);
+        %Transform image into blob image
+        blobImg = createBlobImage(frame, obj, true);
         %detect velocity
-        flow = estimateFlow(opticFlow,mask);
-        if mod(frameCount, 11) == 0
-            Vx = nansum(nansum(flow.Vx));
-            Vy = nansum(nansum(flow.Vy));
-            mag(end+1) = sqrt(Vx^2 + Vy^2);
-            count(end+1) = getNumberOfCars(modelTraining,frame,9, cTotalDescriptors);
-            disp(mag);
-            disp(count);
+        flow = estimateFlow(opticFlow,blobImg);
+        Vx = nansum(nansum(flow.Vx));
+        Vy = nansum(nansum(flow.Vy));
+        mag(end+1) = sqrt(Vx^2 + Vy^2);
+        count(end+1) = getNumberOfCars(KNNTrainedModel,frame,9, cTotalDescriptors);
+        %fprintf( 'Car Speed: %d\n', mag(end));
+        %fprintf( 'Car Count: %d\n\n', count(end));
+        %imshow(frame);
+    elseif frameCount ~= tenFG
+        %Read next frame and apply mask
+        frame = readFrame(obj, videoMask, false);
+        %Transform image into blob image
+        blobImg = createBlobImage(frame, obj, false);
+    end
+    
+    frameCount = frameCount +1;
+    
+    %At the end of the 2 mins (11 frames per second *120 seconds) = 1320 frames
+    if frameCount == 1320
+        magMedian = median(mag);
+        countMedian = round(median(count));
+        
+        if (countMedian ~= 0)
+            magMedian = (magMedian / countMedian);
+        else
+            magMedian = 0;
         end
         
-        if frameCount == 1320 
-            magMedian = median(mag);
-            countMedian = median(count);
-            disp('ANSWER: ');
-            if (countMedian == 0)
-                disp(magMedian / countMedian);
-            else 
-                disp(0);
-            end
-            return
-        end
-        frameCount = frameCount +1;
+        carSpeed = magMedian;
+        carCount = countMedian;
+        return
     end
 end
 
-function obj = setupSystemObjects()
-% Initialize Video I/O
-% Create objects for reading a video from a file, drawing the tracked
-% objects in each frame, and playing the video.
+end
 
+function obj = setupSystemObjects(vidPath)
 % Create a video file reader.
-obj.reader = vision.VideoFileReader('test1.mp4');
-
-% Create two video players, one to display the video,
-% and one to display the foreground mask.
-obj.videoPlayer = vision.VideoPlayer('Position', [20, 400, 700, 400]);
-obj.maskPlayer = vision.VideoPlayer('Position', [740, 400, 700, 400]);
+obj.reader = vision.VideoFileReader(vidPath);
 
 % Create System objects for foreground detection and blob analysis
 
@@ -67,35 +138,33 @@ obj.maskPlayer = vision.VideoPlayer('Position', [740, 400, 700, 400]);
 
 obj.detector = vision.ForegroundDetector('NumGaussians', 3, ...
     'NumTrainingFrames', 40, 'MinimumBackgroundRatio', 0.7);
-
-%Setup vlFeat
-run ('vlfeat\toolbox\mex\mexw64\vl_version.mexw64')
-run('C:\MATLAB\ImageCateogrisation\vlfeat\toolbox\vl_setup');
 end
 
-function frame = readFrame(obj)
-amask = single(rgb2gray(imread('attardmask.jpg')))./255;
+%reads a frame and applies a mask to remove extra detail
+function frame = readFrame(obj, mask, check)
 frame = obj.reader.step();
-frame(:,:,1) = frame(:, :, 1).*amask;
-frame(:,:,2) = frame(:, :, 2).*amask;
-frame(:,:,3) = frame(:, :, 3).*amask;
+if(check)
+    frame(:,:,1) = frame(:, :, 1).*mask;
+    frame(:,:,2) = frame(:, :, 2).*mask;
+    frame(:,:,3) = frame(:, :, 3).*mask;
+end
 end
 
-function mask = detectObjects(frame,obj)
-
+%returns a blob image (black/white)
+function mask = createBlobImage(frame,obj, check)
 % Detect foreground.
 mask = obj.detector.step(frame);
 
-% Apply morphological operations to remove noise and fill in holes.
-mask = imopen(mask, strel('rectangle', [3,3]));
-mask = imclose(mask, strel('rectangle', [15, 15]));
-mask = imfill(mask, 'holes');
-
+if(check)
+    % Apply morphological operations to remove noise and fill in holes.
+    mask = imopen(mask, strel('rectangle', [3,3]));
+    mask = imclose(mask, strel('rectangle', [15, 15]));
+    mask = imfill(mask, 'holes');
+end
 end
 
+%Returns the number of cars in an image using a pretrained knn model
 function result = getNumberOfCars(trainingModel, frame, parts, cTotalDescriptors)
-
-
 if ndims(frame) == 3
     frame = single(rgb2gray(frame));
 else
@@ -116,6 +185,7 @@ pred = predict(trainingModel, imggrid);
 result = sum(pred);
 end
 
+%Returns a bag of words histogram of an image using the given bins
 function bag = getSingleBagOfWords(im, bins)
 if ndims(im) == 3
     im = single(rgb2gray(im));
@@ -136,6 +206,7 @@ for j = 1:size(desc,2)
 end
 end
 
+%Runs Sift
 function [f,d] = runSift(image)
 [f,d] = vl_sift(image);
 d = normc(single(d));
