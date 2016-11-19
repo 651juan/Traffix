@@ -36,8 +36,12 @@ while(true)
     tic;
     [carSpeed,carCount] = trackVideo(currFile,ATTARD_MASK,KNNTrainedModel,cTotalDescriptors);
     elapsedTime = toc;
-   
-    isTrafficResult = 'true';
+    
+    if(carSpeed <= 30) && (carCount >=15) 
+        isTrafficResult = 'true'
+    else
+        isTrafficResult = 'false'
+    end
 
     fileID = fopen('output.json','a');
     toOutput = strcat('"', char(datetime('now')),'":[');
