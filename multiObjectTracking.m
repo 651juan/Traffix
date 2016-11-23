@@ -49,12 +49,13 @@ while(true)
 
     fileID = fopen('output.json','a');
     toOutput = strcat('"', char(datetime('now')),'":[');
-    toOutput = strcat(toOutput,'{','"LOCATION": "ATTARD", "TRAFFIC":"',isTrafficResult,'"}');
-    toOutput = strcat(toOutput,']\n');
+    toOutput = strcat(toOutput,'{','"LOCATION": "ATTARD", "TRAFFIC":"',isTrafficResult, '","SPEED":"', num2str(carSpeed), '","COUNT":"', num2str(carCount),'"}');
+    toOutput = strcat(toOutput,'],\n');
     fprintf(fileID,toOutput);
     fclose(fileID);
     
     currentFileContents = fileread('output.json');
+    currentFileContents = currentFileContents(1:size(currentFileContents,2)-2); %Remove las newline and comma
     file2 = fopen('resultsToUpload.json','w');
     toOutput = strcat(currentFileContents,'\n}\n');
     fprintf(file2,toOutput);
@@ -68,7 +69,7 @@ while(true)
     videosToDelete = ceil((elapsedTime ./ 60) ./ 2);
     
     for i = 1:videosToDelete
-       % delete(strcat(ATTARD_VIDS_PATH,direc(i).name));
+       delete(strcat(ATTARD_VIDS_PATH,direc(i).name));
     end
 end
 end
