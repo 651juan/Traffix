@@ -17,6 +17,10 @@ load('positiveHistograms.mat');
 load('negativeHistograms.mat');
 load('cTotalDescriptors.mat');
 
+%Setup Detector to use
+detector = 'SIFT'; %SIFT/SURF/ESURF
+
+
 %Setup Training Data
 trainingData = [positiveHistograms(1:end,:);negativeHistograms(1:end,:)];
 trainingLabels = [ones(size(positiveHistograms,1),1);zeros(size(negativeHistograms,1),1)];
@@ -34,10 +38,10 @@ while(true)
     direc = dir(strcat(ATTARD_VIDS_PATH,'*.mp4'));
     currFile = strcat(ATTARD_VIDS_PATH,direc(1).name)
     tic;
-    [carSpeed,carCount] = trackVideo(currFile,ATTARD_MASK,KNNTrainedModel,cTotalDescriptors);
-    elapsedTime = toc;
+    [carSpeed,carCount] = trackVideo(currFile,ATTARD_MASK,KNNTrainedModel,cTotalDescriptors, detector);
+    elapsedTime = toc
     
-    if(carSpeed <= 30) && (carCount >=15) 
+    if(carSpeed <= 35) && (carCount >=15) 
         isTrafficResult = 'true'
     else
         isTrafficResult = 'false'
@@ -50,15 +54,26 @@ while(true)
     fprintf(fileID,toOutput);
     fclose(fileID);
     
+    currentFileContents = fileread('output.json');
+    file2 = fopen('resultsToUpload.json','w');
+    toOutput = strcat(currentFileContents,'\n}\n');
+    fprintf(file2,toOutput);
+    fclose(fileID);
+    
+    %Setup FTP
+    ftpObject = ftp('ftpurl:ftpport','ftpuser','ftppass');
+    mput(ftpObject,'resultsToUpload.json');
+    close(ftpObject);
+    
     videosToDelete = ceil((elapsedTime ./ 60) ./ 2);
     
     for i = 1:videosToDelete
-        delete(strcat(ATTARD_VIDS_PATH,direc(i).name));
+       % delete(strcat(ATTARD_VIDS_PATH,direc(i).name));
     end
 end
 end
 
-function [carSpeed,carCount] = trackVideo(videoPath,videoMask,KNNTrainedModel,cTotalDescriptors)
+function [carSpeed,carCount] = trackVideo(videoPath,videoMask,KNNTrainedModel,cTotalDescriptors, detector)
 %Setup System
 obj = setupSystemObjects(videoPath);
 
@@ -97,7 +112,7 @@ while ~isDone(obj.reader)
         Vx = nansum(nansum(flow.Vx));
         Vy = nansum(nansum(flow.Vy));
         mag(end+1) = sqrt(Vx^2 + Vy^2);
-        count(end+1) = getNumberOfCars(KNNTrainedModel,frame,9, cTotalDescriptors);
+        count(end+1) = getNumberOfCars(KNNTrainedModel,frame,9, cTotalDescriptors, detector);
         %fprintf( 'Car Speed: %d\n', mag(end));
         %fprintf( 'Car Count: %d\n\n', count(end));
         %imshow(frame);
@@ -168,7 +183,7 @@ end
 end
 
 %Returns the number of cars in an image using a pretrained knn model
-function result = getNumberOfCars(trainingModel, frame, parts, cTotalDescriptors)
+function result = getNumberOfCars(trainingModel, frame, parts, cTotalDescriptors, detector)
 if ndims(frame) == 3
     frame = single(rgb2gray(frame));
 else
@@ -182,7 +197,7 @@ imggrid = [];
 for i = 1:step1:size(frame,1)-step1
     for j = 1:step2:size(frame,2)-step2
         tmp = frame(i:i+step1-1,j:j+step2-1);
-        imggrid = [imggrid;getSingleBagOfWords(tmp, cTotalDescriptors)];
+        imggrid = [imggrid;getSingleBagOfWords(tmp, cTotalDescriptors, detector)];
     end
 end
 pred = predict(trainingModel, imggrid);
@@ -190,14 +205,8 @@ result = sum(pred);
 end
 
 %Returns a bag of words histogram of an image using the given bins
-function bag = getSingleBagOfWords(im, bins)
-if ndims(im) == 3
-    im = single(rgb2gray(im));
-else
-    im = single(im);
-end
-
-[~,desc] = runSift(im);
+function bag = getSingleBagOfWords(im, bins, detector)
+[~,desc] = runDetector(im,detector);
 bag = zeros(1,size(bins,2));
 
 for j = 1:size(desc,2)
@@ -210,9 +219,30 @@ for j = 1:size(desc,2)
 end
 end
 
-%Runs Sift
-function [f,d] = runSift(image)
-[f,d] = vl_sift(image);
+function [f,d] = runDetector(image, detector)
+if(strcmp(detector,'SIFT'))
+    if ndims(image) == 3
+        image = single(rgb2gray(image));
+    else
+        image = single(image);
+    end
+    
+    [f,d] = vl_sift(image);  
+elseif ((strcmp(detector,'SURF')) || (strcmp(detector,'ESURF')))
+    if ndims(image) == 3
+        image = rgb2gray(image); %Do not convert to single when using SURF
+    end
+    points = detectSURFFeatures(image);
+    if(strcmp(detector,'SURF'))
+        [d, f] = extractFeatures(image, points);
+    elseif (strcmp(detector,'ESURF'))
+        [d, f] = extractFeatures(image, points, 'SURFSize',128);
+    end
+    
+    d = d';
+end
+
+
 d = normc(single(d));
 d(d > 0.2) = 0.2;
 d = normc(d);
