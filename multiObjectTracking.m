@@ -30,9 +30,11 @@ KNNTrainedModel = fitcknn(trainingData, trainingLabels);
 %Setup Video Paths
 ATTARD_VIDS_PATH = 'C:\Users\Admin\Documents\GIT\skylinewebcamcrawler\videos\Attard, Mdina Road from Citroen Showroom\';
 
-fileID = fopen('output.json','w');
-fprintf(fileID,'{\n');
-fclose(fileID);
+if ~exist('output.json')
+    fileID = fopen('output.json','w');
+    fprintf(fileID,'{\n');
+    fclose(fileID);
+end
 
 while(true)
     direc = dir(strcat(ATTARD_VIDS_PATH,'*.mp4'));
@@ -41,12 +43,12 @@ while(true)
     [carSpeed,carCount] = trackVideo(currFile,ATTARD_MASK,KNNTrainedModel,cTotalDescriptors, detector);
     elapsedTime = toc
     
-    if(carSpeed <= 35) && (carCount >=15) 
+    if(carSpeed <= 35) && (carCount >=15)
         isTrafficResult = 'true'
     else
         isTrafficResult = 'false'
     end
-
+    
     fileID = fopen('output.json','a');
     toOutput = strcat('"', char(datetime('now')),'":[');
     toOutput = strcat(toOutput,'{','"LOCATION": "ATTARD", "TRAFFIC":"',isTrafficResult, '","SPEED":"', num2str(carSpeed), '","COUNT":"', num2str(carCount),'"}');
@@ -62,19 +64,25 @@ while(true)
     fclose(fileID);
     
     %Setup FTP
-    ftpObject = ftp('ftpurl:ftpport','ftpuser','ftppass');
+    ftpObject = ftp('ftp.nnjconstruction.com:21','lifex@nnjconstruction.com','Lifex..2016');
     mput(ftpObject,'resultsToUpload.json');
     close(ftpObject);
     
     videosToDelete = ceil((elapsedTime ./ 60) ./ 2);
     
     for i = 1:videosToDelete
-       delete(strcat(ATTARD_VIDS_PATH,direc(i).name));
+        delete(strcat(ATTARD_VIDS_PATH,direc(i).name));
     end
 end
 end
 
 function [carSpeed,carCount] = trackVideo(videoPath,videoMask,KNNTrainedModel,cTotalDescriptors, detector)
+
+videoInfo = VideoReader(videoPath);
+videoDur = videoInfo.Duration;
+videoFPS = videoInfo.FrameRate;
+lastFrame = round(videoDur*videoFPS);
+
 %Setup System
 obj = setupSystemObjects(videoPath);
 
@@ -91,19 +99,19 @@ elevenFG = 0;
 %figure;
 while ~isDone(obj.reader)
     if frameCount == tenFG && frameCount ~= elevenFG
-        tenFG = tenFG + 10;
+        tenFG = tenFG + (videoFPS-1);
         %Read next frame and apply mask
         frame = readFrame(obj, videoMask, true);
         %Transform image into blob image
         blobImg = createBlobImage(frame, obj, true);
         flow = estimateFlow(opticFlow,blobImg);
     elseif frameCount == tenFG && frameCount == elevenFG
-        tenFG = tenFG + 10;
+        tenFG = tenFG + (videoFPS-1);
     end
     
     %Every 11 Frames ie every second calculate speed and car count
     if frameCount == elevenFG
-        elevenFG = elevenFG + 11;
+        elevenFG = elevenFG + videoFPS;
         %Read next frame and apply mask
         frame = readFrame(obj, videoMask, true);
         %Transform image into blob image
@@ -127,7 +135,8 @@ while ~isDone(obj.reader)
     frameCount = frameCount +1;
     
     %At the end of the 2 mins (11 frames per second *120 seconds) = 1320 frames
-    if frameCount == 1320
+    %if frameCount == 1320
+    if frameCount == lastFrame
         magMedian = median(mag);
         countMedian = round(median(count));
         
@@ -228,7 +237,7 @@ if(strcmp(detector,'SIFT'))
         image = single(image);
     end
     
-    [f,d] = vl_sift(image);  
+    [f,d] = vl_sift(image);
 elseif ((strcmp(detector,'SURF')) || (strcmp(detector,'ESURF')))
     if ndims(image) == 3
         image = rgb2gray(image); %Do not convert to single when using SURF
