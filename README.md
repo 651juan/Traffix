@@ -17,7 +17,7 @@ The Code can upload the data to a server and viewed on smartphones using the and
 3. Copy these .mat files in the main folder.
 4. Download the vlfeat Library and run its setup.
 5. Edit the multiObjectTracking.m script to change the video file path and the mask path.
-6. Results will be outputted to console.
+6. Results will be outputted to console or uploaded to an FTP.
 
 # Android Application 
 For the android application follow the link (https://github.com/651juan/Traffixui).
